@@ -386,7 +386,7 @@ jobs:
           TARGETS=()
           
           # 遍历所有版本信息文件并合并内容
-          for file in version-info-all/version_target_*.txt; do
+          for file in $(find version-info-all -type f -name "version_target_*.txt"); do
             if [ -f "$file" ]; then
               # 将单个文件内容追加到合并文件
               cat "$file" >> version-info-all.txt
@@ -399,6 +399,7 @@ jobs:
               done < "$file"
             fi
           done
+          
           # 去重处理
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
           UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
