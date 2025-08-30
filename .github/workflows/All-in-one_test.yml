@@ -1,0 +1,463 @@
+#
+# Description: Build OpenWrt using GitHub Actions
+#
+# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
+#
+# This is free software, licensed under the MIT License.
+# See /LICENSE for more information.
+#
+
+name: 多版本 OpenWRT 构建test
+
+permissions: write-all
+  # 开启写权限，防止无法上传到release
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      enable_ssh:           
+        # 参数名称，用于在工作流中引用
+        description: "启用SSH调试 (true/false)"
+          # 描述信息，显示在手动触发界面
+        required: true
+          # 是/否为必填项（true/false）
+        default: "false"
+          # 默认不开启SSH，如需开启SSH连接，在Run Workflow时把SSH connection to Actions的值改为true
+        type: choice
+          # 输入类型为下拉选择框
+        options:
+          # 下拉框选则内容
+          - "true"
+            # 开启SSH调试
+          - "false"
+            # 关闭SSH调试
+      action:
+        description: "操作类型 (build: 正常构建, build-nocache: 清理缓存构建)"
+        required: true
+        default: "build"
+        type: choice
+        options:
+          - build
+          - build-nocache
+
+  #schedule:
+      #定时触发（当前已注释掉，需启用可删除#）
+  #  - cron: 0 20 * * 4     
+      #      分,时,日,月,周。每周五 20时执行一次 (UTC时间)
+
+env:
+  # 定义环境变量，修改时需要注意:(冒号)后面有空格
+  ENV_SH: scripts/environment.sh
+    # 安装编译依赖工具脚本
+  PACKAGES_SH: scripts/packages.sh
+    # 添加自定义软件仓库脚本
+  SETTINGS_SH: scripts/init-settings.sh
+    #自定义配置(改ip，改密码等）
+  CLASH_CORE_SH: scripts/preset-clash-core-amd64.sh
+  UPLOAD_BIN_DIR: true
+    # 是否上传bin目录(true/false)
+  UPLOAD_FIRMWARE: true
+    # 是否上传最终固件(true/false)
+  UPLOAD_RELEASE: true
+    # 是否将固件发布为Release(true/false)
+  TZ: Asia/Shanghai
+    # 设置时区
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.version }} - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+      # 虚拟机运行环境，如：ubuntu-24.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    strategy:
+      fail-fast: false  # 一个组合失败不影响其他组合
+      matrix:
+        version: [ "Lean", "Lienol", "immortalwrt" ]
+          # 版本维度：三种不同的OpenWRT分支
+        target: [ "X86-64", "Newifi3-D2" ]
+          # 目标设备维度：共有3*2,6种组合
+        include:
+          - version: Lean
+            repo_url: https://github.com/coolsnowwolf/lede.git
+            branch: master
+          - version: Lienol
+            repo_url: https://github.com/Lienol/openwrt.git
+            branch: main
+          - version: immortalwrt
+            repo_url: https://github.com/immortalwrt/immortalwrt.git
+            branch: master
+
+    steps:
+      - name: 准备
+        uses: actions/checkout@main
+
+      - name: 检查配置文件是否存在
+        id: check_config
+        run: |
+          CONFIG_DIR="configs/${{ matrix.version }}"
+            # 定义配置文件所在的目录（版本对应的子目录,如：configs/Lean；configs/Lienol；configs/immortalwrt）
+          TARGET_NAME="${{ matrix.target }}"
+            # 目标文件名（不带后缀，用于模糊匹配，如：x86-64, Newifi3-D2）
+          MATCHED_FILE=$(find "$CONFIG_DIR" -maxdepth 1 -type f -iname "${TARGET_NAME}.config" | head -n 1)
+            # 使用 find 命令在 CONFIG_DIR 中搜索与 TARGET_NAME 大小写无关的 .config 文件
+            # -iname 表示不区分大小写匹配，"$TARGET_NAME.config" 为目标文件名模式，如：x86-64.config，nEWifi3-D2.config
+          
+            # 文件完整存放路径应为：configs/Lean/x86-64.config 或 configs/Lienol/Newifi3-D2
+            # 文件名称不要含“/”，如：文件名不能为 “x86/64.config”，而应存为“x86-64.config”
+
+          if [ -f "$MATCHED_FILE" ]; then
+            echo "找到匹配的配置文件: $MATCHED_FILE"
+            echo "CONFIG_FILE=$MATCHED_FILE" >> $GITHUB_ENV
+              # 将找到的文件路径存入环境变量，供后续步骤使用
+            echo "config_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "在 $CONFIG_DIR 中未找到与 ${TARGET_NAME}.config 匹配的文件（忽略大小写），终止流程!"
+            echo "config_exists=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: 终止不存在配置文件的流程
+        if: steps.check_config.outputs.config_exists == 'false'
+        run: |
+          echo "配置文件不存在，终止工作流"
+          exit 1
+
+      - name: 清理磁盘空间(Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+            # 如果设置为"true"，虽然可以释放约6 GB的空间，但这可能会删除实际需要的工具
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+            # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
+
+      - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          # 禁用交互式提示，软件包安装过程使用默认配置
+        run: |
+          sudo -E apt-get -qq update -y
+          sudo -E apt-get -qq full-upgrade -y
+          chmod +x $ENV_SH && $ENV_SH
+            # 赋予脚本可执行权限并运行该脚本
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -a -f
+          sudo docker container prune -f
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+            # 创建工作目录
+          sudo chown $USER:$GROUPS /workdir
+            # 设置目录权限从默认的 root 改为当前用户
+
+      - name: 检查磁盘空间
+        if: (!cancelled())
+        run: df -hT
+
+      - name: 克隆源代码
+        working-directory: /workdir
+        if: steps.check_config.outputs.config_exists == 'true'  # 配置文件检查双重保险
+        run: |
+          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }}  分支..."
+          git clone --depth=1 -b ${{ matrix.branch }} ${{ matrix.repo_url }} openwrt
+            # 克隆源码仓库
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+            # 创建软链接
+
+      - name: 设置版本环境变量
+        run: |
+          # 从版本名称中提取版本信息
+            if [ "${{ matrix.version }}" = "Lean" ]; then
+              echo "VERSION=lede-master" >> $GITHUB_ENV
+            elif [ "${{ matrix.version }}" = "Lienol" ]; then
+              echo "VERSION=lienol-24.10" >> $GITHUB_ENV
+            elif [ "${{ matrix.version }}" = "immortalwrt" ]; then
+              echo "VERSION=immortalwrt-master" >> $GITHUB_ENV
+            fi
+
+      - name: 添加自定义软件仓库
+        run: |
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/$PACKAGES_SH && $GITHUB_WORKSPACE/$PACKAGES_SH        
+
+      - name: 更新 feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+
+      - name: 安装软件包前删除可能冲突的插件
+        run: |
+          cd openwrt
+          rm -rf feeds/smpackage/{base-files,dnsmasq,firewall*,fullconenat,libnftnl,nftables,ppp,opkg,ucl,upx,vsftpd*,miniupnpd-iptables,wireless-regdb}
+
+      - name: 安装 feeds 软件包
+        run: |
+          cd openwrt
+          ./scripts/feeds install -a
+
+      - name: 执行自定义设置（加自定义配置、改IP地址等）
+        run: |
+          [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
+            # 复制自定义文件
+          [ -f ${{ env.CONFIG_FILE }} ] && cat ${{ env.CONFIG_FILE }} >> openwrt/.config
+            # 复制自定义.config配置
+
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
+          chmod +x $GITHUB_WORKSPACE/$CLASH_CORE_SH && $GITHUB_WORKSPACE/$CLASH_CORE_SH
+
+      - name: SSH远程连接服务器在线配置固件
+        id: ssh
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false
+            # 关闭权限限制
+        if: ${{ github.event.inputs.enable_ssh == 'true' }}
+          # 仅当在Run Workflow时把SSH connection to Actions的值改为"true"时才开启SSH
+          # 当出现类似“ssh Y26QeagDtsPXp2mT6me5cnMRd@nyc1.tmate.io”字样时，复制 SSH 连接命令粘贴到终端内执行，或者复制链接在浏览器中打开使用网页终端。
+          # 然后输入：cd openwrt && make menuconfig
+          # 完成后按Ctrl+D组合键或执行exit命令退出，后续编译工作将自动进行。
+
+      - name: 下载编译依赖软件包
+        id: download-dl
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j$(($(nproc)+1))
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+          make download -j$(($(nproc)+1))
+
+      - name: 开启缓存
+        uses: stupidloud/cachewrtbuild@main
+        with:
+          ccache: 'true'
+            # 启用 ccache 缓存
+          mixkey: ${{ matrix.version }}-${{ matrix.target }}
+            # 定义缓存标识
+          clean: ${{ contains(github.event.action, 'nocache') }}
+          prefix: ${{ github.workspace }}/openwrt
+            # 指定源码根目录路径
+
+      - name: 检查磁盘空间
+        if: (!cancelled())
+        run: df -hT
+
+      - name: 开始编译固件
+        id: compile
+        run: |
+          cd openwrt
+          echo -e "$(($(nproc)+1)) 线程编译"
+          if make -j$(($(nproc) + 1)) ; then
+            echo "编译成功"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "编译失败，尝试单线程编译..."
+            if make -j1 V=s ; then
+              echo "单线程编译成功"
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              echo "编译失败"
+              echo "status=failed" >> $GITHUB_OUTPUT
+            fi 
+          fi
+
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/^CONFIG_TARGET_(.*)_DEVICE_(.*)=y/\1-\2/'  > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+            # 提取设备名称
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+            # 添加时间戳
+
+      - name: 检查磁盘空间
+        if: (!cancelled())
+        run: df -hT
+
+      - name: 整理固件文件夹
+        working-directory: /workdir
+        id: organize
+        if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+        run: |
+          mkdir -p firmware
+            # 创建固件存放目录
+          cd openwrt/bin/targets/*/*/
+            # 进入固件输出目录
+          TARGET_PLATFORM=$(basename $(dirname $(pwd)))
+            # 提取目标平台信息
+          echo "当前目标平台: $TARGET_PLATFORM"     
+
+          shopt -s nullglob    
+            # 启用通配符空匹配处理
+          shopt -s nocasematch 
+            # 启用不区分大小写匹配
+          
+          if [[ "$TARGET_PLATFORM" == x86* ]]; then
+            for file in *combined* *sysupgrade*; do
+            [ -f "$file" ] && mv "$file" "/workdir/firmware/${{ matrix.version }}_$file"
+            done
+              # X86平台：保存文件名中包含 combined 或 sysupgrade 名的文件至firmware文件夹
+          else
+            for file in *squashfs*.bin; do
+            [ -f "$file" ] && mv "$file" "/workdir/firmware/${{ matrix.version }}_$file"
+              # 其他平台：只保存sysupgrade.bin及factory.bin格式
+            done
+          fi
+          
+          cd /workdir/firmware
+          INFO_FILE="${{ matrix.version }}_${{matrix.target}}_build-info.txt"
+          printf "版本: ${{ matrix.version }}\n目标设备: ${{ matrix.target }}\n构建时间: $(date)\n\n文件MD5校验和:\n" > "$INFO_FILE"
+          # 添加MD5校验和
+          for file in *; do
+            if [ -f "$file" ] && [ "$file" != "$INFO_FILE" ]; then
+              md5=$(md5sum "$file" | awk '{print $1}')
+              echo "$md5  $file" >> "$INFO_FILE"
+            fi
+          done
+          
+          #复制配置文件
+          cp /workdir/openwrt/.config  ./${{ matrix.version }}_${{matrix.target}}.config 2>/dev/null || true
+          #添加版本、设备、构建时间信息
+          
+          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+            #将当前目录（固件存放目录）路径写入环境变量FIRMWARE
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        with:
+          name: firmware-${{ matrix.version }}_${{ matrix.target }}_${{ env.FILE_DATE }}
+          path: ${{ env.FIRMWARE }}
+
+      - name: 保存版本和目标信息
+        working-directory: /workdir
+        if: steps.organize.outputs.status == 'success'
+        run: |
+          echo "${{ matrix.version }}:${{ env.DEVICE_NAME }}" >> version_target_${{ matrix.version }}_${{ matrix.target }}.txt
+
+      - name: 上传版本信息
+        uses: actions/upload-artifact@v4
+        with:
+          name: version_info_${{ matrix.version }}_${{ matrix.target }}
+          path: /workdir/version_target_${{ matrix.version }}_${{ matrix.target }}.txt
+
+      - name: 设置作业输出
+        id: set-outputs
+        run: |
+          echo "upload_release=${{ env.UPLOAD_RELEASE }}" >> $GITHUB_OUTPUT
+
+  release-all:
+    name: 合并发布所有固件
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      ${{ 
+        always() && 
+        !cancelled() && 
+        contains(join(needs.build.*.result, ','), 'success')  && 
+        needs.build.outputs.upload_release == 'true' 
+      }}
+
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: all-firmwares
+
+
+      - name: 下载版本信息
+        uses: actions/download-artifact@v4
+        with:
+          path: version-info-all
+          pattern: version_info*
+
+      - name: 提取版本和目标信息
+        id: extract_version_target
+        run: |
+          # 创建合并后的版本信息文件
+          echo "所有版本和目标设备信息汇总" > version-info-all.txt
+          echo "==========================================" >> version-info-all.txt
+          
+          VERSIONS=()
+          TARGETS=()
+          
+          # 遍历所有版本信息文件并合并内容
+          for file in version-info-all/version_target_*.txt; do
+            if [ -f "$file" ]; then
+              # 将单个文件内容追加到合并文件
+              cat "$file" >> version-info-all.txt
+              echo "==========================================" >> version-info-all.txt
+              # 提取版本和目标设备信息用于后续处理
+              while IFS= read -r line; do
+                IFS=':' read -ra parts <<< "$line"
+                VERSIONS+=("${parts[0]}")
+                TARGETS+=("${parts[1]}")
+              done < "$file"
+            fi
+          done
+          # 去重处理
+          UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
+          UNIQUE_TARGETS=($(printf "%s\n" "${TARGETS[@]}" | sort -u))
+          # 输出到步骤变量
+          echo "versions=${UNIQUE_VERSIONS[*]}" >> $GITHUB_OUTPUT
+          echo "targets=${UNIQUE_TARGETS[*]}" >> $GITHUB_OUTPUT
+
+      - name: 整理合并固件
+        run: |
+          mkdir -p final-release
+          # 复制所有文件到统一目录
+          find all-firmwares -type f -exec cp {} final-release/ \;
+          # 合并所有信息文件为统一的 all-build-info.txt
+          echo "# 所有固件详细信息" > final-release/all-build-info.txt
+          echo "==========================================" >> final-release/all-build-info.txt
+          # 遍历所有信息文件并追加内容
+          for info_file in $(find all-firmwares -type f -name "*build-info.txt" | grep -v "all-build-info.txt"); do
+            if [ -f "$info_file" ]; then
+              echo -e "\n$(cat "$info_file")" >> final-release/all-build-info.txt
+              echo "==========================================" >> final-release/all-build-info.txt
+            fi
+          done
+          # 删除除all-build-info.txt外的其他build-info.txt文件
+          find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
+          
+          
+          #生成release标题
+          echo "# OpenWRT 固件汇总发布" > release.txt
+          echo "发布时间: $(date +'%Y-%m-%d %H:%M:%S')" >> release.txt
+          echo "包含以下版本和设备的固件：" >> release.txt
+          echo "- 版本: ${{ steps.extract_version_target.outputs.versions }}" >> release.txt
+          echo "- 设备: ${{ steps.extract_version_target.outputs.targets }}" >> release.txt
+          echo -e "\n各固件详细信息及MD5请查看 all-build-info.txt 文件" >> release.txt
+          echo -e "\n🌐 默认管理IP: 192.168.123.1" >> release.txt
+
+      - name: 生成统一发布标签
+        id: tag
+        run: |
+          echo "release_tag=openwrt-all-firmwares_$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: 发布合并后的Release
+        uses: softprops/action-gh-release@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          files: final-release/*
+
+      - name: 保留最新3个Release
+        uses: dev-drprasad/delete-older-releases@v0.3.3
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 删除旧的工作流程
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          retain_days: 0
+          keep_minimum_runs: 3
