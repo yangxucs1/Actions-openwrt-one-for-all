@@ -161,7 +161,6 @@ jobs:
 
       - name: 克隆源代码
         working-directory: /workdir
-        if: steps.check_config.outputs.config_exists == 'true'  # 配置文件检查双重保险
         run: |
           echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }}  分支..."
           git clone --depth=1 -b ${{ matrix.branch }} ${{ matrix.repo_url }} openwrt
