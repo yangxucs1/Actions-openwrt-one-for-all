@@ -410,6 +410,9 @@ jobs:
         run: |
           mkdir -p final-release
           # 复制所有文件到统一目录
+                    # 删除版本目标信息文件
+          find final-release -type f -name "version_target_*.txt" -print -delete
+          
           find all-firmwares -type f -exec cp {} final-release/ \;
           # 合并所有信息文件为统一的 all-build-info.txt
           echo "# 所有固件详细信息" > final-release/all-build-info.txt
@@ -423,8 +426,6 @@ jobs:
           done
           # 删除除all-build-info.txt外的其他build-info.txt文件
           find final-release -type f -name "*build-info.txt" -not -name "all-build-info.txt" -delete
-          # 删除版本目标信息文件
-          find final-release -type f -name "version_target_*.txt" -delete
           
           #生成release标题
           echo "# OpenWRT 固件汇总发布" > release.txt
