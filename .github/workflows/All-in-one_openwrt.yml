@@ -208,7 +208,7 @@ jobs:
 
           cd openwrt
           chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
-          chmod +x $GITHUB_WORKSPACE/$CLASH_CORE_SH && $GITHUB_WORKSPACE/$CLASH_CORE_SH
+
 
       - name: SSH远程连接服务器在线配置固件
         id: ssh
