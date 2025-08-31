@@ -399,6 +399,8 @@ jobs:
               done < "$file"
             fi
           done
+
+          find version-info-all -type f -name "version_target_*.txt" -delete
           
           # 去重处理
           UNIQUE_VERSIONS=($(printf "%s\n" "${VERSIONS[@]}" | sort -u))
