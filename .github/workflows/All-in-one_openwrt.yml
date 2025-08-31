@@ -410,10 +410,11 @@ jobs:
         run: |
           mkdir -p final-release
           # 复制所有文件到统一目录
-                    # 删除版本目标信息文件
-          find final-release -type f -name "version_target_*.txt" -print -delete
-          
           find all-firmwares -type f -exec cp {} final-release/ \;
+          
+          # 删除final-release目录中的version_target_*.txt文件
+          find final-release -type f -name "version_target_*.txt" -delete
+          
           # 合并所有信息文件为统一的 all-build-info.txt
           echo "# 所有固件详细信息" > final-release/all-build-info.txt
           echo "==========================================" >> final-release/all-build-info.txt
