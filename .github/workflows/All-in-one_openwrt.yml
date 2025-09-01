@@ -75,7 +75,7 @@ jobs:
       matrix:
         version: [ "Lean", "Lienol", "immortalwrt" ]
           # 版本维度：三种不同的OpenWRT分支
-        target: [ "X86-64", "Newifi3-D2" ]
+        target: [ "X86-64", "Newifi3-D2_32M", "TL-WDR7500-V3_16M" ]
           # 目标设备维度：共有3*2,6种组合
         include:
           - version: Lean
@@ -199,7 +199,7 @@ jobs:
           cd openwrt
           ./scripts/feeds install -a
 
-      - name: 执行自定义设置（加自定义配置、改IP地址等）
+      - name: 执行通用自定义 .sh 脚本（加自定义配置、改IP地址等）
         run: |
           [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
             # 复制自定义文件
@@ -209,6 +209,28 @@ jobs:
           cd openwrt
           chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
 
+      - name: 检查目标设备专用 .sh 脚本
+        id: check_target_sh
+        run: |
+          TARGET_NAME="${{ matrix.target }}"
+          # 在 scripts 目录中查找与目标名称匹配的 .sh 文件（不区分大小写）
+          MATCHED_SH_FILE=$(find scripts -maxdepth 1 -type f -iname "*${TARGET_NAME}*.sh" | head -n 1)
+          
+          if [ -f "$MATCHED_SH_FILE" ]; then
+            echo "找到匹配的 .sh 文件: $MATCHED_SH_FILE"
+            echo "TARGET_SH_FILE=$MATCHED_SH_FILE" >> $GITHUB_ENV
+            echo "target_sh_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "未找到与 ${TARGET_NAME} 匹配的 .sh 文件"
+            echo "target_sh_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 执行目标设备专用 .sh 脚本
+        if: steps.check_target_sh.outputs.target_sh_exists == 'true'
+        run: |
+          echo "执行目标设备特定的脚本: ${{ env.TARGET_SH_FILE }}"
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/${{ env.TARGET_SH_FILE }} && $GITHUB_WORKSPACE/${{ env.TARGET_SH_FILE }}
 
       - name: SSH远程连接服务器在线配置固件
         id: ssh
