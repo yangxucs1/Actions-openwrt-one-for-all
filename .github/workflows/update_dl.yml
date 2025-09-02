@@ -117,6 +117,19 @@ jobs:
           echo "配置文件不存在，终止工作流"
           exit 1
 
+      - name: 清理磁盘空间(Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          # 如果设置为"true"，虽然可以释放约6 GB的空间，但这可能会删除实际需要的工具
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+          # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
+
       - name: 初始化编译环境
         env:
           DEBIAN_FRONTEND: noninteractive
