@@ -117,19 +117,6 @@ jobs:
           echo "配置文件不存在，终止工作流"
           exit 1
 
-      - name: 清理磁盘空间(Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-            # 如果设置为"true"，虽然可以释放约6 GB的空间，但这可能会删除实际需要的工具
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-            # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
-
       - name: 初始化编译环境
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -232,11 +219,11 @@ jobs:
         run: |
           cd openwrt
           make defconfig
-
+          
           # 第一次多线程下载
           echo "第一次多线程下载依赖包..."
-          make download -j$(($(nproc)+1))
-    
+          make download -j$(($(nproc)+1)) || true  # 即使失败也继续
+          
           # 删除可能损坏的小文件
           echo "删除可能损坏的小文件..."
           find dl -size -1024c -exec ls -l {} \;
@@ -244,16 +231,35 @@ jobs:
           
           # 第二次多线程下载
           echo "第二次多线程下载依赖包..."
-          if make download -j$(($(nproc)+1)); then
+          if make download -j$(($(nproc)+1)) 2>&1 | tee download.log; then
             echo "多线程下载成功完成"
           else
-            echo "多线程下载失败，切换到单线程下载..."
+            echo "多线程下载失败，检查错误..."
+            # 检查输出中是否包含ERROR
+            if grep -q "ERROR:" download.log; then
+              echo "检测到ERROR，切换到单线程详细模式..."
+          
+              # 单线程详细模式下载
+              if make download -j1 V=s; then
+                echo "单线程下载成功完成"
+              else
+                echo "单线程下载也失败，终止流程!"
+                exit 1
+              fi
+            else
+              echo "多线程下载完成，没有检测到ERROR"
+            fi
+          fi
+          
+          # 额外检查：即使make返回成功，也要检查是否有ERROR输出
+          if grep -q "ERROR:" download.log; then
+            echo "检测到ERROR输出，切换到单线程详细模式..."
           
             # 单线程详细模式下载
             if make download -j1 V=s; then
               echo "单线程下载成功完成"
             else
-              echo "单线程下载失败，终止流程!"
+              echo "单线程下载也失败，终止流程!"
               exit 1
             fi
           fi
