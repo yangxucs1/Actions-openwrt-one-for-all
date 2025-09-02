@@ -71,7 +71,8 @@ jobs:
         version: [ "Lean", "Lienol", "immortalwrt" ]
           # 版本维度：三种不同的OpenWRT分支
         target: [ "X86-64", "Newifi3-D2_32M", "TL-WDR7500-V3_16M" ]
-          # 目标设备维度：共有3*2,6种组合
+          # 目标设备维度：三种不同的机型
+          # 即共有3*3=9种组合
         include:
           - version: Lean
             repo_url: https://github.com/coolsnowwolf/lede.git
