@@ -285,7 +285,7 @@ jobs:
         with:
           name: OpenWrt_dl_${{ matrix.version }}-${{ matrix.target }}
           path: openwrt/dl
-          retention-days: 30
+          retention-days: 7
           if-no-files-found: warn
       
       - name: 删除旧的工作流程
