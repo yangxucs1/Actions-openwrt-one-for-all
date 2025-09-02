@@ -227,16 +227,36 @@ jobs:
           cd openwrt
           chmod +x $GITHUB_WORKSPACE/${{ env.TARGET_SH_FILE }} && $GITHUB_WORKSPACE/${{ env.TARGET_SH_FILE }}
 
-
       - name: 下载编译依赖软件包
         id: download-dl
         run: |
           cd openwrt
           make defconfig
+
+          # 第一次多线程下载
+          echo "第一次多线程下载依赖包..."
           make download -j$(($(nproc)+1))
+    
+          # 删除可能损坏的小文件
+          echo "删除可能损坏的小文件..."
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
-          make download -j$(($(nproc)+1))
+          
+          # 第二次多线程下载
+          echo "第二次多线程下载依赖包..."
+          if make download -j$(($(nproc)+1)); then
+            echo "多线程下载成功完成"
+          else
+            echo "多线程下载失败，切换到单线程下载..."
+          
+            # 单线程详细模式下载
+            if make download -j1 V=s; then
+              echo "单线程下载成功完成"
+            else
+              echo "单线程下载失败，终止流程!"
+              exit 1
+            fi
+          fi
 
       - name: 开启缓存
         uses: stupidloud/cachewrtbuild@main
