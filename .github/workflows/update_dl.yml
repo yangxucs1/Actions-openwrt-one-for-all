@@ -1,0 +1,269 @@
+#
+# Description: Build OpenWrt using GitHub Actions
+#
+# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
+#
+# This is free software, licensed under the MIT License.
+# See /LICENSE for more information.
+#
+
+name: 多版本 OpenWRT 构建test
+
+permissions: write-all
+  # 开启写权限，防止无法上传到release
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      enable_ssh:           
+        # 参数名称，用于在工作流中引用
+        description: "启用SSH调试 (true/false)"
+          # 描述信息，显示在手动触发界面
+        required: true
+          # 是/否为必填项（true/false）
+        default: "false"
+          # 默认不开启SSH，如需开启SSH连接，在Run Workflow时把SSH connection to Actions的值改为true
+        type: choice
+          # 输入类型为下拉选择框
+        options:
+          # 下拉框选则内容
+          - "true"
+            # 开启SSH调试
+          - "false"
+            # 关闭SSH调试
+      action:
+        description: "操作类型 (build: 正常构建, build-nocache: 清理缓存构建)"
+        required: true
+        default: "build"
+        type: choice
+        options:
+          - build
+          - build-nocache
+
+  #schedule:
+      #定时触发（当前已注释掉，需启用可删除#）
+  #  - cron: 0 20 * * 4     
+      #      分,时,日,月,周。每周五 20时执行一次 (UTC时间)
+
+env:
+  # 定义环境变量，修改时需要注意:(冒号)后面有空格
+  ENV_SH: scripts/environment.sh
+    # 安装编译依赖工具脚本
+  PACKAGES_SH: scripts/packages.sh
+    # 添加自定义软件仓库脚本
+  SETTINGS_SH: scripts/init-settings.sh
+    #自定义配置(改ip，改密码等）
+  UPLOAD_DL_DIR: true
+    # 是否上传bin目录(true/false)
+  TZ: Asia/Shanghai
+    # 设置时区
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.version }} - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+      # 虚拟机运行环境，如：ubuntu-24.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    strategy:
+      fail-fast: false  # 一个组合失败不影响其他组合
+      matrix:
+        version: [ "Lean", "Lienol", "immortalwrt" ]
+          # 版本维度：三种不同的OpenWRT分支
+        target: [ "X86-64", "Newifi3-D2_32M", "TL-WDR7500-V3_16M" ]
+          # 目标设备维度：共有3*2,6种组合
+        include:
+          - version: Lean
+            repo_url: https://github.com/coolsnowwolf/lede.git
+            branch: master
+          - version: Lienol
+            repo_url: https://github.com/Lienol/openwrt.git
+            branch: main
+          - version: immortalwrt
+            repo_url: https://github.com/immortalwrt/immortalwrt.git
+            branch: master
+
+    steps:
+      - name: 准备
+        uses: actions/checkout@main
+
+      - name: 检查配置文件是否存在
+        id: check_config
+        run: |
+          CONFIG_DIR="configs/${{ matrix.version }}"
+            # 定义配置文件所在的目录（版本对应的子目录,如：configs/Lean；configs/Lienol；configs/immortalwrt）
+          TARGET_NAME="${{ matrix.target }}"
+            # 目标文件名（不带后缀，用于模糊匹配，如：x86-64, Newifi3-D2）
+          MATCHED_FILE=$(find "$CONFIG_DIR" -maxdepth 1 -type f -iname "${TARGET_NAME}.config" | head -n 1)
+            # 使用 find 命令在 CONFIG_DIR 中搜索与 TARGET_NAME 大小写无关的 .config 文件
+            # -iname 表示不区分大小写匹配，"$TARGET_NAME.config" 为目标文件名模式，如：x86-64.config，nEWifi3-D2.config
+          
+            # 文件完整存放路径应为：configs/Lean/x86-64.config 或 configs/Lienol/Newifi3-D2
+            # 文件名称不要含“/”，如：文件名不能为 “x86/64.config”，而应存为“x86-64.config”
+
+          if [ -f "$MATCHED_FILE" ]; then
+            echo "找到匹配的配置文件: $MATCHED_FILE"
+            echo "CONFIG_FILE=$MATCHED_FILE" >> $GITHUB_ENV
+              # 将找到的文件路径存入环境变量，供后续步骤使用
+            echo "config_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "在 $CONFIG_DIR 中未找到与 ${TARGET_NAME}.config 匹配的文件（忽略大小写），终止流程!"
+            echo "config_exists=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: 终止不存在配置文件的流程
+        if: steps.check_config.outputs.config_exists == 'false'
+        run: |
+          echo "配置文件不存在，终止工作流"
+          exit 1
+
+      - name: 清理磁盘空间(Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+            # 如果设置为"true"，虽然可以释放约6 GB的空间，但这可能会删除实际需要的工具
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+            # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
+
+      - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          # 禁用交互式提示，软件包安装过程使用默认配置
+        run: |
+          sudo -E apt-get -qq update -y
+          sudo -E apt-get -qq full-upgrade -y
+          chmod +x $ENV_SH && $ENV_SH
+            # 赋予脚本可执行权限并运行该脚本
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -a -f
+          sudo docker container prune -f
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+            # 创建工作目录
+          sudo chown $USER:$GROUPS /workdir
+            # 设置目录权限从默认的 root 改为当前用户
+
+      - name: 检查磁盘空间
+        if: (!cancelled())
+        run: df -hT
+
+      - name: 克隆源代码
+        working-directory: /workdir
+        run: |
+          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }}  分支..."
+          git clone --depth=1 -b ${{ matrix.branch }} ${{ matrix.repo_url }} openwrt
+            # 克隆源码仓库
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+            # 创建软链接
+
+      - name: 设置版本环境变量
+        run: |
+          # 从版本名称中提取版本信息
+            if [ "${{ matrix.version }}" = "Lean" ]; then
+              echo "VERSION=lede-master" >> $GITHUB_ENV
+            elif [ "${{ matrix.version }}" = "Lienol" ]; then
+              echo "VERSION=lienol-24.10" >> $GITHUB_ENV
+            elif [ "${{ matrix.version }}" = "immortalwrt" ]; then
+              echo "VERSION=immortalwrt-master" >> $GITHUB_ENV
+            fi
+
+      - name: 添加自定义软件仓库
+        run: |
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/$PACKAGES_SH && $GITHUB_WORKSPACE/$PACKAGES_SH        
+
+      - name: 更新 feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+
+      - name: 安装软件包前删除可能冲突的插件
+        run: |
+          cd openwrt
+          rm -rf feeds/smpackage/{base-files,dnsmasq,firewall*,fullconenat,libnftnl,nftables,ppp,opkg,ucl,upx,vsftpd*,miniupnpd-iptables,wireless-regdb}
+
+      - name: 安装 feeds 软件包
+        run: |
+          cd openwrt
+          ./scripts/feeds install -a
+
+      - name: 执行通用自定义 .sh 脚本（加自定义配置、改IP地址等）
+        run: |
+          [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
+            # 复制自定义文件
+          [ -f ${{ env.CONFIG_FILE }} ] && cat ${{ env.CONFIG_FILE }} >> openwrt/.config
+            # 复制自定义.config配置
+
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
+
+      - name: 检查目标设备专用 .sh 脚本
+        id: check_target_sh
+        run: |
+          TARGET_NAME="${{ matrix.target }}"
+          # 在 scripts 目录中查找与目标名称匹配的 .sh 文件（不区分大小写）
+          MATCHED_SH_FILE=$(find scripts -maxdepth 1 -type f -iname "*${TARGET_NAME}*.sh" | head -n 1)
+          
+          if [ -f "$MATCHED_SH_FILE" ]; then
+            echo "找到匹配的 .sh 文件: $MATCHED_SH_FILE"
+            echo "TARGET_SH_FILE=$MATCHED_SH_FILE" >> $GITHUB_ENV
+            echo "target_sh_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "未找到与 ${TARGET_NAME} 匹配的 .sh 文件"
+            echo "target_sh_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 执行目标设备专用 .sh 脚本
+        if: steps.check_target_sh.outputs.target_sh_exists == 'true'
+        run: |
+          echo "执行目标设备特定的脚本: ${{ env.TARGET_SH_FILE }}"
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/${{ env.TARGET_SH_FILE }} && $GITHUB_WORKSPACE/${{ env.TARGET_SH_FILE }}
+
+
+      - name: 下载编译依赖软件包
+        id: download-dl
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j$(($(nproc)+1))
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+          make download -j$(($(nproc)+1))
+
+      - name: 开启缓存
+        uses: stupidloud/cachewrtbuild@main
+        with:
+          ccache: 'true'
+            # 启用 ccache 缓存
+          mixkey: ${{ matrix.version }}-${{ matrix.target }}
+            # 定义缓存标识
+          clean: ${{ contains(github.event.action, 'nocache') }}
+          prefix: ${{ github.workspace }}/openwrt
+            # 指定源码根目录路径
+
+      - name: 检查磁盘空间
+        if: (!cancelled())
+        run: df -hT
+
+      - name: 上传dl文件夹在github空间
+        uses: actions/upload-artifact@v4
+        if: env.UPLOAD_DL_DIR == 'true'
+        with:
+          name: OpenWrt_dl_${{ matrix.version }}-${{ matrix.target }}
+          path: openwrt/dl
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: 删除旧的工作流程
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          retain_days: 0
+          keep_minimum_runs: 3
