@@ -200,7 +200,7 @@ jobs:
           cd openwrt
           ./scripts/feeds install -a
 
-      - name: 执行通用自定义 .sh 脚本（加自定义配置、改IP地址等）
+      - name: 执行通用脚本（加自定义配置、改IP地址等）
         run: |
           [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
             # 复制自定义文件
