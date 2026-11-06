@@ -311,7 +311,6 @@ jobs:
         if: steps.mktools.outputs.status == 'success' && !cancelled()
         run: |
           cd openwrt
-          rm -rf dl/*
           rm -rf build_dir/host/*
           rm -rf build_dir/toolchain-*
 
