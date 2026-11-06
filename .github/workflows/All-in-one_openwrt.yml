@@ -473,7 +473,8 @@ jobs:
 
   release-all:
     name: 合并发布所有固件
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    #建议编译环境与发布环境一致
     needs: build
     if: |
       ${{
