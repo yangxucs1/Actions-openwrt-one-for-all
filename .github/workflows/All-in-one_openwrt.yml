@@ -67,8 +67,8 @@ env:
 jobs:
   build:
     name: 构建 ${{ matrix.version }} - ${{ matrix.target }}
-    runs-on: ubuntu-latest
-      # 虚拟机运行环境，如：ubuntu-24.04
+    runs-on: ubuntu-22.04
+      # 虚拟机运行环境，如：ubuntu-24.04/ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     strategy:
       fail-fast: false  # 一个组合失败不影响其他组合
