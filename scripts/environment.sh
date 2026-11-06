@@ -1,6 +1,6 @@
 sudo apt update -y
 sudo apt full-upgrade -y
-sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+sudo apt install -y ack asciidoc autoconf automake autopoint binutils bison build-essential \
 bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
 g++-multilib git gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
 libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev \
