@@ -82,13 +82,13 @@ jobs:
         include:
           - version: Lean
             repo_url: https://github.com/coolsnowwolf/lede.git
-            branch: master
+            #branch: master
           - version: Lienol
             repo_url: https://github.com/Lienol/openwrt.git
-            branch: main
+            #branch: main
           - version: immortalwrt
             repo_url: https://github.com/immortalwrt/immortalwrt.git
-            branch: master
+            #branch: master
 
     steps:
       - name: 准备
@@ -165,22 +165,30 @@ jobs:
       - name: 克隆源代码
         working-directory: /workdir
         run: |
-          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }}  分支..."
-          git clone --depth=1 -b ${{ matrix.branch }} ${{ matrix.repo_url }} openwrt
-            # 克隆源码仓库
+          # matrix 里没写 branch 时，自动探测仓库默认分支：
+          BRANCH="$BRANCH_OVERRIDE"
+          if [ -z "$BRANCH" ]; then
+            BRANCH=$(git ls-remote --symref "$REPO_URL" HEAD 2>/dev/null | awk '/^ref:/ {sub("refs/heads/","",$2); print $2; exit}') || true
+          fi
+          
+          if [ -n "$BRANCH" ]; then
+            echo "从 ${{ matrix.version }} 克隆 $BRANCH 分支..."
+            git clone --depth=1 -b "$BRANCH" "$REPO_URL" openwrt
+          else
+            echo "::warning::未能探测到 $REPO_URL 的默认分支，直接克隆默认分支"
+            git clone --depth=1 "$REPO_URL" openwrt
+            BRANCH=$(git -C openwrt rev-parse --abbrev-ref HEAD)
+          fi
+
+          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          echo "本次实际分支: $BRANCH"
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-            # 创建软链接
 
       - name: 设置版本环境变量
         run: |
-          # 从版本名称中提取版本信息
-            if [ "${{ matrix.version }}" = "Lean" ]; then
-              echo "VERSION=lede-master" >> $GITHUB_ENV
-            elif [ "${{ matrix.version }}" = "Lienol" ]; then
-              echo "VERSION=lienol-24.10" >> $GITHUB_ENV
-            elif [ "${{ matrix.version }}" = "immortalwrt" ]; then
-              echo "VERSION=immortalwrt-master" >> $GITHUB_ENV
-            fi
+          VERSION_LOWER=$(echo "${{ matrix.version }}" | tr '[:upper:]' '[:lower:]')
+          echo "VERSION=${VERSION_LOWER}-${BRANCH}" >> "$GITHUB_ENV"
+          echo "版本标识: ${VERSION_LOWER}-${BRANCH}"
 
       - name: 添加自定义软件仓库
         run: |
@@ -265,7 +273,7 @@ jobs:
             # 启用 ccache 缓存
           mixkey: ${{ matrix.version }}-${{ matrix.target }}
             # 定义缓存标识
-          clean: ${{ contains(github.event.action, 'nocache') }}
+          clean: ${{ inputs.action == 'build-nocache' || github.event.action == 'build-nocache' }}
           prefix: ${{ github.workspace }}/openwrt
             # 指定源码根目录路径
 
@@ -467,13 +475,7 @@ jobs:
     runs-on: ubuntu-22.04
     #建议编译环境与发布环境一致
     needs: build
-    if: |
-      ${{
-        always() &&
-        !cancelled() &&
-        !contains(join(needs.build.*.result, ','), 'failure') &&
-        contains(join(needs.build.*.result, ','), 'success')
-      }}
+    if: always() && !cancelled()
 
     steps:
       - name: 下载所有构建产物
