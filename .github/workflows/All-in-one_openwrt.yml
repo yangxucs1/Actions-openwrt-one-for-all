@@ -82,13 +82,13 @@ jobs:
         include:
           - version: Lean
             repo_url: https://github.com/coolsnowwolf/lede.git
-            branch: master
+            # branch: master
           - version: Lienol
             repo_url: https://github.com/Lienol/openwrt.git
-            branch: main
+            # branch: main
           - version: immortalwrt
             repo_url: https://github.com/immortalwrt/immortalwrt.git
-            branch: master
+            # branch: master
 
     steps:
       - name: 准备
@@ -176,6 +176,39 @@ jobs:
             # 克隆源码仓库
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
             # 创建软链接
+
+      - name: 克隆源代码
+        working-directory: /workdir
+        env:
+          REPO_URL: ${{ matrix.repo_url }}
+          BRANCH_OVERRIDE: ${{ matrix.branch }}
+            # 没写 branch 时这里是空串
+        run: |
+          if [ -z "$REPO_URL" ]; then
+            echo "::error::matrix.repo_url 为空，请检查 include 是否为版本 '${{ matrix.version }}' 配了 repo_url"
+            exit 1
+          fi
+          BRANCH="$BRANCH_OVERRIDE"
+          if [ -z "$BRANCH" ]; then
+            # ls-remote --symref HEAD 会返回：ref: refs/heads/<默认分支>
+            BRANCH=$(git ls-remote --symref "$REPO_URL" HEAD 2>/dev/null | awk '/^ref:/ {sub("refs/heads/","",$2); print $2; exit}') || true
+          fi
+          if [ -n "$BRANCH" ]; then
+            echo "从 ${{ matrix.version }} 克隆 $BRANCH 分支..."
+            git clone --depth=1 -b "$BRANCH" "$REPO_URL" openwrt
+          else
+            echo "::warning::未能探测默认分支，直接克隆默认分支"
+            git clone --depth=1 "$REPO_URL" openwrt
+            BRANCH=$(git -C openwrt rev-parse --abbrev-ref HEAD)
+              # 克隆后回填，别让后面拿到空值
+          fi
+          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+            # 整个 job 后续步骤都能读 $BRANCH
+          echo "本次实际分支: $BRANCH"
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+            # 创建软链接
+
+
 
       - name: 设置版本环境变量
         run: |
