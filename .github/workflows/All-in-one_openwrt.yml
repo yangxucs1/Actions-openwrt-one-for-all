@@ -172,15 +172,6 @@ jobs:
 
       - name: 克隆源代码
         working-directory: /workdir
-        run: |
-          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }} 分支..."
-          git clone --depth=1 -b "${{ matrix.branch }}" "${{ matrix.repo_url }}" openwrt
-            # 克隆源码仓库
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-            # 创建软链接
-
-      - name: 克隆源代码
-        working-directory: /workdir
         env:
           REPO_URL: ${{ matrix.repo_url }}
           BRANCH_OVERRIDE: ${{ matrix.branch }}
@@ -433,8 +424,10 @@ jobs:
           echo -e "$(($(nproc)+1)) thread compile"
           if make target/install -j$(nproc) || make target/install -j1 V=s; then
             # 编译成功后提取设备名称和设置时间戳
-            grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/^CONFIG_TARGET_(.*)_DEVICE_(.*)=y/\1-\2/'  > DEVICE_NAME
-            [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+            grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/^CONFIG_TARGET_(.*)_DEVICE_(.*)=y/\1-\2/' | head -n 1 > DEVICE_NAME || true
+            if [ -s DEVICE_NAME ]; then
+              echo "DEVICE_NAME=$(head -n 1 DEVICE_NAME)" >> $GITHUB_ENV
+            fi
             echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
             echo "固件编译成功"
             echo "status=success" >> $GITHUB_OUTPUT
@@ -526,13 +519,7 @@ jobs:
     name: 合并发布所有固件
     runs-on: ubuntu-22.04
     needs: build
-    if: |
-      ${{ 
-        always() && 
-        !cancelled() && 
-        contains(join(needs.build.*.result, ','), 'success')  && 
-        needs.build.outputs.upload_release == 'true' 
-      }}
+    if: always() && !cancelled()
 
     steps:
       - name: 下载所有构建产物
