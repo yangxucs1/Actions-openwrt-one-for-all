@@ -199,9 +199,17 @@ jobs:
           ./scripts/feeds update -a
 
       - name: 安装软件包前删除可能冲突的插件
+        if: matrix.version != 'immortalwrt'
+          # 只有 Lean / Lienol 执行。
         run: |
           cd openwrt
+          if [ ! -d feeds/smpackage ]; then
+            echo "feeds/smpackage 不存在（当前版本没有该 feed），跳过清理"
+            exit 0
+          fi
+            # 加一层判断，万一 Lean/Lienol 哪天去掉 smpackage，这一步也不会静默删错东西
           rm -rf feeds/smpackage/{base-files,dnsmasq,firewall*,fullconenat,libnftnl,nftables,ppp,opkg,ucl,upx,vsftpd*,miniupnpd-iptables,wireless-regdb}
+
 
       - name: 安装 feeds 软件包
         run: |
