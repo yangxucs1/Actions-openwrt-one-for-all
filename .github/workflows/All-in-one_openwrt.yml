@@ -72,6 +72,7 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
     strategy:
       fail-fast: false  # 一个组合失败不影响其他组合
+      max-parallel: 3
       matrix:
         version: [ "Lean", "Lienol", "immortalwrt" ]
           # 版本维度：三种不同的OpenWRT分支
@@ -100,6 +101,13 @@ jobs:
             # 定义配置文件所在的目录（版本对应的子目录,如：configs/Lean；configs/Lienol；configs/immortalwrt）
           TARGET_NAME="${{ matrix.target }}"
             # 目标文件名（不带后缀，用于模糊匹配，如：x86-64, Newifi3-D2）
+            
+          if [ ! -d "$CONFIG_DIR" ]; then
+                      echo "配置目录不存在: $CONFIG_DIR"
+                      echo "config_exists=false" >> "$GITHUB_OUTPUT"
+                      exit 0
+                    fi
+            
           MATCHED_FILE=$(find "$CONFIG_DIR" -maxdepth 1 -type f -iname "${TARGET_NAME}.config" | head -n 1)
             # 使用 find 命令在 CONFIG_DIR 中搜索与 TARGET_NAME 大小写无关的 .config 文件
             # -iname 表示不区分大小写匹配，"$TARGET_NAME.config" 为目标文件名模式，如：x86-64.config，nEWifi3-D2.config
@@ -133,7 +141,7 @@ jobs:
           haskell: true
           large-packages: true
           docker-images: true
-          swap-storage: true
+          swap-storage: false
             # 所有这些选项都默认为"true"，但你可以根据工作流程的需要，随时将其设置为 false
 
       - name: 初始化编译环境
@@ -142,7 +150,7 @@ jobs:
           # 禁用交互式提示，软件包安装过程使用默认配置
         run: |
           sudo -E apt-get -qq update -y
-          sudo -E apt-get -qq full-upgrade -y
+          #sudo -E apt-get -qq full-upgrade -y
           chmod +x $ENV_SH && $ENV_SH
             # 赋予脚本可执行权限并运行该脚本
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -163,8 +171,8 @@ jobs:
       - name: 克隆源代码
         working-directory: /workdir
         run: |
-          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }}  分支..."
-          git clone --depth=1 -b ${{ matrix.branch }} ${{ matrix.repo_url }} openwrt
+          echo "从 ${{ matrix.version }} 克隆 ${{ matrix.branch }} 分支..."
+          git clone --depth=1 -b "${{ matrix.branch }}" "${{ matrix.repo_url }}" openwrt
             # 克隆源码仓库
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
             # 创建软链接
@@ -204,7 +212,7 @@ jobs:
         run: |
           [ -d files ] && mv files openwrt/files || echo "files 目录不存在"
             # 复制自定义文件
-          [ -f ${{ env.CONFIG_FILE }} ] && cat ${{ env.CONFIG_FILE }} >> openwrt/.config
+          [ -n "${{ env.CONFIG_FILE }}" ] && [ -f "${{ env.CONFIG_FILE }}" ] && cat "${{ env.CONFIG_FILE }}" >> openwrt/.config
             # 复制自定义.config配置
 
           cd openwrt
@@ -253,7 +261,7 @@ jobs:
           make download -j$(($(nproc)+1))
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
-          make download -j$(($(nproc)+1))
+          make download -j$(($(nproc)+1)) || make download -j1 V=s
 
       - name: 开启缓存
         uses: stupidloud/cachewrtbuild@main
@@ -262,7 +270,7 @@ jobs:
             # 启用 ccache 缓存
           mixkey: ${{ matrix.version }}-${{ matrix.target }}
             # 定义缓存标识
-          clean: ${{ contains(github.event.action, 'nocache') }}
+          clean: ${{ inputs.action == 'build-nocache' || github.event.action == 'build-nocache' }}
           prefix: ${{ github.workspace }}/openwrt
             # 指定源码根目录路径
 
@@ -280,10 +288,10 @@ jobs:
           compile_with_fallback() {
             local target=$1
 
-            if ! make $target -j$(($(nproc)+1)); then
-              echo "多线程编译 $target 失败，尝试单线程编译"
-              if ! make $target -j1 V=s; then
-                echo "$target 编译失败"
+            if ! make "${target}" -j$(($(nproc)+1)); then
+              echo "多线程编译 ${target} 失败，尝试单线程编译"
+              if ! make "${target}" -j1 V=s; then
+                echo "${target} 编译失败"
                 return 1
               fi
             fi
@@ -311,7 +319,6 @@ jobs:
         if: steps.mktools.outputs.status == 'success' && !cancelled()
         run: |
           cd openwrt
-          rm -rf dl/*
           rm -rf build_dir/host/*
           rm -rf build_dir/toolchain-*
 
@@ -355,7 +362,7 @@ jobs:
             else
               echo "status=failed" >> $GITHUB_OUTPUT
               echo "插件安装失败"
-            exit 1
+              exit 1
             fi
           else
             echo "status=failed" >> $GITHUB_OUTPUT
@@ -401,7 +408,7 @@ jobs:
       - name: 整理固件文件夹
         working-directory: /workdir
         id: organize
-        if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
         run: |
           mkdir -p firmware
             # 创建固件存放目录
@@ -413,7 +420,7 @@ jobs:
 
           shopt -s nullglob    
             # 启用通配符空匹配处理
-          shopt -s nocasematch 
+          shopt -s nocaseglob 
             # 启用不区分大小写匹配
           
           if [[ "$TARGET_PLATFORM" == x86* ]]; then
@@ -430,7 +437,7 @@ jobs:
           
           cd /workdir/firmware
           INFO_FILE="${{ matrix.version }}_${{matrix.target}}_build-info.txt"
-          printf "版本: ${{ matrix.version }}\n目标设备: ${{ matrix.target }}\n构建时间: $(date)\n\n文件MD5校验和:\n" > "$INFO_FILE"
+          printf "版本: ${{ matrix.version }}\n目标设备: ${{ matrix.target }}\n实际分支: $BRANCH\n构建时间: $(date)\n\n文件MD5校验和:\n" > "$INFO_FILE"
           # 添加MD5校验和
           for file in *; do
             if [ -f "$file" ] && [ "$file" != "$INFO_FILE" ]; then
@@ -462,6 +469,7 @@ jobs:
 
       - name: 上传版本信息
         uses: actions/upload-artifact@v4
+        if: steps.organize.outputs.status == 'success' && !cancelled()
         with:
           name: version_info_${{ matrix.version }}_${{ matrix.target }}
           path: /workdir/version_target_${{ matrix.version }}_${{ matrix.target }}.txt
@@ -473,7 +481,7 @@ jobs:
 
   release-all:
     name: 合并发布所有固件
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: build
     if: |
       ${{ 
@@ -566,6 +574,7 @@ jobs:
 
       - name: 发布合并后的Release
         uses: softprops/action-gh-release@master
+        if: env.UPLOAD_RELEASE == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -584,5 +593,5 @@ jobs:
       - name: 删除旧的工作流程
         uses: Mattraks/delete-workflow-runs@main
         with:
-          retain_days: 0
+          retain_days: 7
           keep_minimum_runs: 3
