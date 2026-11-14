@@ -9,7 +9,7 @@
 
 name: 多版本 OpenWRT 构建
 
-permissions: write-all
+permissions: write
   # 开启写权限，防止无法上传到release
 
 on:
@@ -67,18 +67,16 @@ env:
 jobs:
   build:
     name: 构建 ${{ matrix.version }} - ${{ matrix.target }}
-    runs-on: ubuntu-24.04
-      # 虚拟机运行环境，如：ubuntu-24.04/ubuntu-latest
+    runs-on: ubuntu-22.04
+      # 虚拟机运行环境，如：ubuntu-22.04/ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     strategy:
       fail-fast: false  # 一个组合失败不影响其他组合
       max-parallel: 3
       matrix:
-        version: [ "immortalwrt" ]
-          # version: [ "Lean", "Lienol", "immortalwrt" ]
-          # 版本维度：三种不同的OpenWRT分支
-        target: [ "X86-64" ]
-          # target: [ "X86-64", "Newifi3-D2_32M", "TL-WDR7500-V3_16M" ]
+        version: [ "Lean", "Lienol" ]
+          # 版本维度：二种不同的OpenWRT分支
+        target: [ "X86-64", "Newifi3-D2_32M", "TL-WDR7500-V3_16M" ]
           # 目标设备维度：三种不同的设备
           #即共有 version * target 种组合
         include:
@@ -88,9 +86,6 @@ jobs:
           - version: Lienol
             repo_url: https://github.com/Lienol/openwrt.git
             # branch: main
-          - version: immortalwrt
-            repo_url: https://github.com/immortalwrt/immortalwrt.git
-            # branch: master
 
     steps:
       - name: 准备
@@ -225,8 +220,6 @@ jobs:
           ./scripts/feeds update -a
 
       - name: 安装软件包前删除可能冲突的插件
-        if: matrix.version != 'immortalwrt'
-          # 只有 Lean / Lienol 执行。
         run: |
           cd openwrt
           if [ ! -d feeds/smpackage ]; then
@@ -517,7 +510,7 @@ jobs:
 
   release-all:
     name: 合并发布所有固件
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     needs: build
     if: always() && !cancelled()
 
